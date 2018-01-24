@@ -1,43 +1,108 @@
 apiVersion: v1
-kind: Namespace
+kind: ConfigMap
 metadata:
-  name: ftp
+  name: files-conf
+  namespace: storage
+data:
+  config: |-
+    {
+      "port": 80,
+      "address": "",
+      "database": "/etc/database/data.db",
+      "scope": "/srv",
+      "allowCommands": true,
+      "allowEdit": true,
+      "allowNew": true,
+      "commands": []
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: files
+  namespace: storage
+spec:
+  ports:
+  - port: 80
+  selector:
+    app: files
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: files-pv-claim
+  namespace: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ftp
-  namespace: ftp
+  name: files
+  namespace: storage
   labels:
-    app: ftp
+    app: files
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ftp
+      app: files
   template:
     metadata:
       labels:
-        app: ftp
+        app: files
     spec:
       containers:
-      - name: ftp
-        image: kauden/pure-ftpd-mysql
+      - name: files
+        image: hacdias/filemanager
         ports:
-        - containerPort: 21
+        - containerPort: 80
           protocol: TCP
         volumeMounts:
-        - name: tls
-          mountPath: "/etc/ssl/private/pure-ftpd.pem"
-          subPath: tls.crt
-          readOnly: true
         - name: data
-          mountPath: "/ftpdata"
-    volumes:
-    - name: tls
-      secret:
-        secretName: ftp-tls
-    - name: data
-      nfs:
-        server: 10.110.110.221
-        path: /
+          mountPath: /srv
+        - name: files-conf
+          mountPath: /etc/config.json
+          subPath: config.json
+        - name: persistent-storage
+          mountPath: /etc/database
+      volumes: 
+      - name: data
+        nfs:
+          server: 10.110.110.221
+          path: /
+      - name: files-conf
+        configMap:
+           name: files-conf
+           items:
+            - key: config
+              path: config.conf
+      - name: persistent-storage
+        persistentVolumeClaim:
+          claimName: files-pv-claim
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: files
+  namespace: storage
+  annotations:
+    kubernetes.io/tls-acme: "true"
+spec:
+  tls:
+  - hosts:
+    - storage.fluidmedia.wales
+    secretName: files-tls
+  rules:
+  - host: storage.fluidmedia.wales
+    http:
+      paths:
+      - path: "/"
+        backend:
+          serviceName: files
+          servicePort: 80
+
